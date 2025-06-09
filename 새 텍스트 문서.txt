@@ -1,0 +1,144 @@
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+local Character
+local HumanoidRootPart
+local Humanoid
+
+local teleporting = false
+local teleportConnection = nil
+local targetPlayer = nil
+
+local savedPosition = nil
+local savedCameraSubject = nil
+local savedCameraCFrame = nil
+
+-- 노클립 + 플레이어 충돌 끄기 함수
+local function setNoClip(state)
+	if not Character then return end
+
+	-- 캐릭터 파츠 충돌 설정
+	for _, part in pairs(Character:GetChildren()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = not state
+		end
+	end
+
+	-- 플레이어 충돌 꺼짐/켜짐 처리
+	-- HumanoidRootPart의 CollisionGroup을 바꾸는 방식 활용 (CollisionGroups가 설정되어 있다면)
+	-- 아니면 직접 CanCollide 조절 (기본으로는 위에서 파츠별로 처리함)
+
+	-- 여기서는 간단히 HumanoidRootPart CanCollide도 같이 제어
+	if HumanoidRootPart then
+		HumanoidRootPart.CanCollide = not state
+	end
+end
+
+-- 가장 가까운 플레이어 찾기 (한번만)
+local function getNearestPlayer()
+	local closestPlayer = nil
+	local shortestDistance = math.huge
+
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Humanoid") then
+			local dist = (HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+			if dist < shortestDistance then
+				shortestDistance = dist
+				closestPlayer = player
+			end
+		end
+	end
+
+	return closestPlayer
+end
+
+local function teleportBelow(target)
+	local targetHRP = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+	if not targetHRP then return end
+
+	local offset = Vector3.new(0, -3.5, 0)
+	local newPos = targetHRP.Position + offset
+
+	-- 현재 프레임에서는 방향 고정 (지속적으로 회전하지 않도록)
+	local direction = (targetHRP.Position - HumanoidRootPart.Position).Unit
+	local lookCFrame = CFrame.lookAt(newPos, newPos + direction)
+
+	HumanoidRootPart.CFrame = lookCFrame
+end
+
+local function stopTeleport()
+	teleporting = false
+	setNoClip(false)  -- 노클립 + 충돌 복구
+
+	-- 카메라 복구
+	if savedCameraSubject then
+		Camera.CameraSubject = savedCameraSubject
+	end
+	if savedCameraCFrame then
+		Camera.CFrame = savedCameraCFrame
+	end
+
+	-- 위치 복귀
+	if savedPosition and HumanoidRootPart then
+		HumanoidRootPart.CFrame = savedPosition
+	end
+
+	-- 초기화
+	savedPosition = nil
+	savedCameraSubject = nil
+	savedCameraCFrame = nil
+	targetPlayer = nil
+
+	if teleportConnection then
+		teleportConnection:Disconnect()
+		teleportConnection = nil
+	end
+end
+
+local function startTeleport()
+	teleporting = true
+	setNoClip(true)  -- 노클립 + 충돌 꺼짐
+
+	targetPlayer = getNearestPlayer()
+	if not targetPlayer then
+		warn("가장 가까운 플레이어를 찾을 수 없습니다.")
+		setNoClip(false)
+		teleporting = false
+		return
+	end
+
+	teleportConnection = RunService.RenderStepped:Connect(function()
+		if not targetPlayer.Parent or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+			stopTeleport()
+			return
+		end
+
+		teleportBelow(targetPlayer)
+	end)
+
+	-- 카메라 저장 및 대상 플레이어로 변경
+	savedCameraSubject = Camera.CameraSubject
+	savedCameraCFrame = Camera.CFrame
+
+	Camera.CameraSubject = targetPlayer.Character.Humanoid
+end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if input.KeyCode == Enum.KeyCode.E then
+		Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+		HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+		Humanoid = Character:FindFirstChild("Humanoid")
+		if not HumanoidRootPart or not Humanoid then return end
+
+		if teleporting then
+			stopTeleport()
+		else
+			savedPosition = HumanoidRootPart.CFrame
+			startTeleport()
+		end
+	end
+end)
